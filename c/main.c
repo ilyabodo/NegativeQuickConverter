@@ -5,25 +5,14 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <pthread.h>
+#include <dirent.h>
+#include <ctype.h>
+#include <sys/stat.h>
 
 #include "main.h"
-
-unsigned char calculate_stddev(unsigned char* arr, int n, float mean) {
-    long sum_squares = 0;
-    for (int i = 0; i < n; ++i) {
-        int diff = arr[i] - mean; // Calculate the difference from the mean
-        sum_squares += diff * diff; // Square the difference and accumulate the sum
-    }
-    return (unsigned char)sqrt(sum_squares / (n)); // Divide the sum of squares by total number of elements and take the square root to get the standard deviation
-}
-
-unsigned char calculate_mean(unsigned char* arr, int n) {
-    long sum = 0;
-    for (int i = 0; i < n; ++i) {
-        sum += arr[i];
-    }
-    return (unsigned char)(sum / n);
-}
 
 int process_bw_image() {
     const char *filename = "test.jpg";
@@ -101,8 +90,8 @@ int process_bw_image() {
 
     return 0;
 }
-int process_rgb_image() {
-    const char *filename = "test.jpg";
+int process_rgb_image(char* in_path, char* out_path) {
+    const char *filename = in_path;
     int width, height, channels;
 
 
@@ -120,13 +109,13 @@ int process_rgb_image() {
     unsigned char G_max = 0;
     unsigned char B_max = 0;
 
-    long r_sum = 0;
-    long g_sum = 0;
-    long b_sum = 0;
+    long long r_sum = 0;
+    long long g_sum = 0;
+    long long b_sum = 0;
 
-    long r_square_sum = 0;
-    long g_square_sum = 0;
-    long b_square_sum = 0;
+    long long r_square_sum = 0;
+    long long g_square_sum = 0;
+    long long b_square_sum = 0;
 
     /** First loop splits the image into RGB channels, finds min and max
      *  values, and keeps a running sum and sum of squares. **/
@@ -189,19 +178,40 @@ int process_rgb_image() {
     // Calculate 1st and 99th percentiles
     // 5th percentile value roughly 2 standard deviations below mean
     // 95th percentile value roughly 2 standard deviations above mean
-    const unsigned char R_5 = R_mean - 2*R_sd;
-    const unsigned char R_95 = R_mean + 2*R_sd;
+    unsigned char R_5 = 0;
+    unsigned char R_95 = 255;
+    if (2*R_sd < R_mean){
+        R_5 = R_mean - 2*R_sd;
+    }
+    if (2*R_sd < 255 - R_mean) {
+        R_95 = R_mean + 2*R_sd;
+    }
 
-    const unsigned char G_5 = G_mean - 2*G_sd;
-    const unsigned char G_95 = G_mean + 2*G_sd;
+    unsigned char G_5 = 0;
+    unsigned char G_95 = 255;
+    if (2*G_sd < G_mean){
+        G_5 = G_mean - 2*G_sd;
+    }
+    if (2*G_sd < 255 - G_mean) {
+        G_95 = G_mean + 2*G_sd;
+    }
 
-    const unsigned char B_5 = B_mean - 2*B_sd;
-    const unsigned char B_95 = B_mean + 2*B_sd;
+    unsigned char B_5 = 0;
+    unsigned char B_95 = 255;
+    if (2*B_sd < B_mean){
+        B_5 = B_mean - 2*B_sd;
+    }
+    if (2*B_sd < 255 - B_mean) {
+        B_95 = B_mean + 2*B_sd;
+    }
+    
+
 
     // Precompute the range between 1st and 99th percentile
     const unsigned char R_inter_range = R_95 - R_5;
     const unsigned char G_inter_range = G_95 - G_5;
     const unsigned char B_inter_range = B_95 - B_5;
+    //printf("B_inter_range: %d\n", B_inter_range);
 
     // Allocate space for the output image
     unsigned char* new_image = (unsigned char*)malloc(width * height * 3);
@@ -244,8 +254,7 @@ int process_rgb_image() {
         // Store R channel value in final image array
         new_image[i * channels + 2] = B[i];
     }
-
-    int result = stbi_write_jpg("output.jpg", width, height, 3, new_image, 50); // 3 channels (R, G, B), quality = 100
+    int result = stbi_write_jpg(out_path, width, height, 3, new_image, 50); // 3 channels (R, G, B), quality = 100
 
     if (result == 0) {
         printf("Error writing JPEG file.\n");
@@ -256,12 +265,118 @@ int process_rgb_image() {
     free(G);
     free(B);
     free(new_image);
+    
 
     return 0;
 }
 
-int main() {
-    process_rgb_image();
+void str_lower_case(char* str) {
+    if (str == NULL) {
+        return;
+    }
+    for (int i = 0; str[i] != '\0'; ++i) {
+        str[i] = tolower(str[i]);
+    }
+}
 
+void* thread_start(void* arg) {
+    char* in_path = ((char**)arg)[0];
+    char* out_path = ((char**)arg)[1];
+    process_rgb_image(in_path, out_path);
+    // Free the dynamically allocated memory
+    free(in_path);
+    free(out_path);
+    free(arg);
+    return NULL;
+}
+
+// Function to check if a file has .jpg extension
+int is_jpg_file(const char* file_name) {
+    char* ext = strrchr(file_name, '.');
+    str_lower_case(ext);
+    if (ext != NULL && strcmp(ext, ".jpg") == 0) {
+        return 1;
+    } else if (ext != NULL && strcmp(ext, ".jpeg") == 0) {
+        return 1;
+    }
+    return 0;
+}
+
+// Function to get a list of all JPG files in a directory
+char** get_jpg_files(const char* dir_path, int* num_files) {
+    DIR* dir;
+    struct dirent* ent;
+    char** jpg_files = NULL;
+    int count = 0;
+
+    dir = opendir(dir_path);
+    if (dir == NULL) {
+        printf("Failed to open directory: %s\n", dir_path);
+        return NULL;
+    }
+
+    while ((ent = readdir(dir)) != NULL) {
+        if (ent->d_type == DT_REG && is_jpg_file(ent->d_name)) {
+            count++;
+            jpg_files = realloc(jpg_files, count * sizeof(char*));
+            jpg_files[count - 1] = strdup(ent->d_name);
+        }
+    }
+
+    closedir(dir);
+
+    *num_files = count;
+    return jpg_files;
+}
+
+int main() {
+    const char* dir_path = "."; // Change this to the desired directory path
+    int num_files;
+    char** jpg_files = get_jpg_files(dir_path, &num_files);
+    
+
+    const char* out_dir_name = "NegativeQuickConvertC/"; // Directory name to be checked/created
+    
+    
+
+    // Check if directory exists
+    struct stat st;
+    if (stat(out_dir_name, &st) == -1) {
+        // Directory does not exist, create it
+        if (mkdir(out_dir_name, 0700) == -1) {
+            printf("Failed to create directory '%s'\n", out_dir_name);
+            return 1; // Return with error status
+        } else {
+            printf("Directory '%s' created successfully\n", out_dir_name);
+        }
+    } else {
+        printf("Directory '%s' already exists\n", out_dir_name);
+    }
+
+    if (jpg_files == NULL) {
+        printf("No JPG files found in directory '%s'\n", dir_path);
+        return 1;
+    }
+
+    pthread_t threads[num_files];    
+    for (int i = 0; i < num_files; i++) {
+        int len = strlen(jpg_files[i]) + strlen("out/") + 1;
+
+        char** args = malloc(2 * sizeof(char*));
+        args[0] = jpg_files[i];
+        char* out_path = malloc(len * sizeof(char*));
+        strcpy(out_path, out_dir_name);
+        strcat(out_path, jpg_files[i]);
+        args[1] = out_path;
+        
+        pthread_create(&threads[i], NULL, thread_start, args);
+    }
+        
+    for (int i = 0; i < num_files; i++) {
+        pthread_join(threads[i], NULL);
+    }
+    
+
+    free(jpg_files);
     return 0;
 }
