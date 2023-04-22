@@ -19,6 +19,10 @@ int process_bw_image() {
     int width, height, channels;
 
     unsigned char* image_data = stbi_load(filename, &width, &height, &channels, 0);
+    if (image_data == NULL) {
+        printf("Image not able to be loaded... exiting\n");
+        return 1;
+    }
 
     unsigned char* BW = (unsigned char*)malloc(width * height * sizeof(unsigned char));
     
@@ -96,6 +100,11 @@ int process_rgb_image(char* in_path, char* out_path) {
 
 
     unsigned char *image_data = stbi_load(filename, &width, &height, &channels, 0);
+    if (image_data == NULL) {
+        printf("Image not able to be loaded... exiting\n");
+        return 1;
+    }
+
     // Separate the channels
     unsigned char* R = (unsigned char*)malloc(width * height * sizeof(unsigned char));
     unsigned char* G = (unsigned char*)malloc(width * height * sizeof(unsigned char));
@@ -319,6 +328,11 @@ char** get_jpg_files(const char* dir_path, int* num_files) {
         if (ent->d_type == DT_REG && is_jpg_file(ent->d_name)) {
             count++;
             jpg_files = realloc(jpg_files, count * sizeof(char*));
+            if (jpg_files == NULL){
+                printf("Problem reading jpg files... exiting\n");
+                closedir(dir);
+                return (char**)-1;
+            }
             jpg_files[count - 1] = strdup(ent->d_name);
         }
     }
@@ -358,13 +372,22 @@ int main() {
         return 1;
     }
 
-    pthread_t threads[num_files];    
+    pthread_t *threads = malloc(num_files * sizeof(pthread_t));
     for (int i = 0; i < num_files; i++) {
         int len = strlen(jpg_files[i]) + strlen("out/") + 1;
 
         char** args = malloc(2 * sizeof(char*));
+        if (args == NULL) {
+            printf("Malloc failed... stopping.\n");
+            return 1;
+        }
+
         args[0] = jpg_files[i];
         char* out_path = malloc(len * sizeof(char*));
+        if (out_path == NULL) {
+            printf("Malloc failed... stopping.\n");
+            return 1;
+        }
         strcpy(out_path, out_dir_name);
         strcat(out_path, jpg_files[i]);
         args[1] = out_path;
@@ -376,7 +399,7 @@ int main() {
         pthread_join(threads[i], NULL);
     }
     
-
+    free(threads);
     free(jpg_files);
     return 0;
 }
